@@ -165,6 +165,10 @@ import syslog
 import re
 from optparse import OptionParser, OptionGroup, BadOptionError
 
+# itertools.filerfalse
+def filterfalse(func, seq):
+    return filter(lambda x: not func(x), seq)
+
 # -------------------------------------------------------------
 # This script was inspired by: DenyHosts, which has been developed
 #    by Phil Schwartz: http://denyhosts.sourceforge.net/
@@ -985,41 +989,77 @@ def _do_iproute(path, dry_run, blocked_ips):
     # 10.99.99.98 via 127.0.0.1 dev lo
 
     via = "127.0.0.1"
-    cmd = path + " list"
-    (waitstatus, output) = _do_cmd(cmd, dry_run, 0)
-    if waitstatus != 0:
-        return
+
 
     drop_regex = "^" + Config.HOST_IP_RE + r".+?via\s+" + via
     Log.Debug("   pattern to search for ip route blocked ip: ", drop_regex)
     drop_regex = re.compile(drop_regex)
 
-    blocked = blocked_ips[:]
-    for line in output.splitlines():
-        m = drop_regex.search(line)
-        if not m: continue
-        try:
-            host = m.group("ip")
-            if host in blocked:
-                blocked.remove(host)
-                Log.Debug("  route already exists for host ", host)
-            else:
-                Log.Debug("  route found for non-blocked host, removing ", host)
-                cmd = path + " del %s" % host
-                (waitstatus, output) = _do_cmd(cmd, dry_run, 0)
-                if waitstatus != 0:
-                    return
-                Log.Info(" ... ip route, removing null routing for: ", host)
-        except IndexError:
-            pass
+    blocked_ipv4 = filterfalse(is_IPv6_address, blocked_ips)
+    blocked_ipv6 = filter(is_IPv6_address, blocked_ips)
 
-    # now blocked contains all IP addresses that need to have null-routes
-    for host in blocked:
-        Log.Info(" ... ip route, adding null route for: ", host)
-        cmd = path + " add %s via %s" % (host, via)
+    if blocked_ipv4:
+        cmd = path + " list"
+        Log.Debug("Command: " + cmd)
         (waitstatus, output) = _do_cmd(cmd, dry_run, 0)
         if waitstatus != 0:
             return
+
+        for line in output.splitlines():
+            m = drop_regex.search(line)
+            if not m: continue
+            try:
+                host = m.group("ip")
+                if host in blocked_ipv4:
+                    blocked_ipv4.remove(host)
+                    Log.Debug("  route already exists for host ", host)
+                else:
+                    Log.Debug("  route found for non-blocked host, removing ", host)
+                    cmd = path + " del %s" % host
+                    (waitstatus, output) = _do_cmd(cmd, dry_run, 0)
+#                    if waitstatus != 0:
+#                        return
+                    Log.Info(" ... ip route, removing null routing for: ", host)
+            except IndexError:
+                pass
+
+        for host in blocked_ipv4:
+            Log.Info(" ... ip route, adding null route for: ", host)
+            cmd = path + " add %s via %s" % (host, via)
+            (waitstatus, output) = _do_cmd(cmd, dry_run, 0)
+
+    drop_regex = "^(unreachable )?" + Config.HOST_IP_RE + r".+?dev\slo\s+"
+    Log.Debug("   pattern to search for ip route blocked ip: ", drop_regex)
+    drop_regex = re.compile(drop_regex)
+
+    if blocked_ipv6:
+        path6 = path.split(' ')[0] + ' -6 route'
+        cmd = path6 + " list"
+        (waitstatus, output) = _do_cmd(cmd, dry_run, 0)
+        if waitstatus != 0:
+            return
+        for line in output.splitlines():
+            m = drop_regex.search(line)
+            if not m:
+                continue
+            try:
+                host = m.group("ip")
+                if host in blocked_ipv6:
+                    blocked_ipv6.remove(host)
+                    Log.Debug("  route already exists for host ", host)
+                else:
+                    Log.Info(" ... ip route 6, adding null route for: ", host)
+                    cmd = path6 + " del %s " % host
+                    (waitstatus, output) = _do_cmd(cmd, dry_run, 0)
+            except IndexError:
+                pass
+
+        for host in blocked_ipv6:
+            Log.Info(" ... ip -6 route, adding null route for: ", host)
+            cmd = path6 + " add %s via %s dev lo" % (host, "::1")
+            (waitstatus, output) = _do_cmd(cmd, dry_run, 0)
+# now blocked contains all IP addresses that need to have null-routes
+
 
 # ======================= HELPER CLASSES ========================
 def sort_by_value(d, reverse = False):
@@ -1147,7 +1187,6 @@ class BlockHostsConfig(ConfigSection):
         # ----
         r'))'
         )
-
     NAME = "blockhosts"  # config file section name is [NAME]
 
     def setup_options(self, oparser, config):
