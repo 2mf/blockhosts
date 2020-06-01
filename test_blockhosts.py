@@ -139,7 +139,7 @@ class TestBlockHosts(unittest.TestCase):
                 Log.Debug('  ... checking IP', ip, count)
                 if ip not in table:
                     failed.append('** Watched IP %s unexpected, in line:\n   %s' % (ip, line))
-            
+
         sl.close()
 
         (blocked, watched) = self.BH_OBJ.get_hosts_lists()
